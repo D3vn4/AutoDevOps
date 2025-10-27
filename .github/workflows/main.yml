@@ -40,6 +40,6 @@ jobs:
         env:
           # Passes the stored secrets securely to the Python script
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_PAT: ${{ secrets.GITHUB_PAT_COMMENT }}
+          GITHUB_PAT: ${{ secrets.PAT_COMMENT }}
           # Pass the current PR URL so the script knows where to post the comment
           PR_URL: ${{ github.event.pull_request.html_url }}
