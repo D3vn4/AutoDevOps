@@ -21,7 +21,7 @@ import logging
 # Third-Party Libraries
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process
-from crewai_tools import BaseTool
+from crewai.tools import BaseTool
 from github import Github, Auth # CRITICAL: Import Auth for modern PAT usage
 
 # --- 2. Configuration and Setup ---
