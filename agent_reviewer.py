@@ -77,7 +77,6 @@ class GitHubPRTool(BaseTool):
             # FIX: Use Auth.Token() for modern, non-deprecated PyGithub authentication
             auth = Auth.Token(github_pat)
             self.github_client = Github(auth=auth)
-            self.github_client.get_user().login # Verify auth
             logging.info("GitHubPRTool: Authenticated successfully.")
         except Exception as e:
             logging.error(f"GitHubPRTool: Failed to authenticate with PAT. {e}")
@@ -168,7 +167,6 @@ class GitHubPRCommentTool(BaseTool):
             # FIX: Use Auth.Token() for modern, non-deprecated PyGithub authentication
             auth = Auth.Token(github_pat)
             self.github_client = Github(auth=auth)
-            self.github_client.get_user().login
             logging.info("GitHubPRCommentTool: Authenticated successfully.")
         except Exception as e:
             logging.error(f"GitHubPRCommentTool: Failed to authenticate with PAT. {e}")
