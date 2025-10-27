@@ -44,5 +44,4 @@ jobs:
           # This token is guaranteed to exist and have the 'pull-requests: write' permission.
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }} 
           
-          # Pass the current PR URL
           PR_URL: ${{ github.event.pull_request.html_url }}
