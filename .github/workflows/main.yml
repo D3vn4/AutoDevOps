@@ -1,0 +1,45 @@
+# .github/workflows/main.yml
+
+name: AutoDevOps PR Review Pipeline
+
+# --- 1. Define when this workflow runs ---
+on:
+  pull_request:
+    types: [opened, synchronize, reopened] # Triggers on PR creation or new commits (synchronize)
+
+# --- 2. Define the main job ---
+jobs:
+  run_auto_review:
+    runs-on: ubuntu-latest
+    
+    # Give the workflow explicit permission to read code and post comments
+    permissions:
+      contents: read
+      pull-requests: write # This is essential for posting the review comment
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4 # Downloads your code to the runner
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # Recommended Python version for stability
+
+      - name: Install Dependencies
+        run: |
+          # Upgrade pip and install all project dependencies
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install optional Gemini dependencies (needed because of the LLM model string format)
+          pip install "crewai[google-genai]"
+          
+      - name: Execute 4-Agent Pipeline
+        # This step runs your main script. It passes the secrets as environment variables (env).
+        run: python agent_reviewer.py
+        env:
+          # Passes the stored secrets securely to the Python script
+          GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT_COMMENT }}
+          # Pass the current PR URL so the script knows where to post the comment
+          PR_URL: ${{ github.event.pull_request.html_url }}
