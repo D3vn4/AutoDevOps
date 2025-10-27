@@ -5,44 +5,42 @@ name: AutoDevOps PR Review Pipeline
 # --- 1. Define when this workflow runs ---
 on:
   pull_request:
-    types: [opened, synchronize, reopened] # Triggers on PR creation or new commits (synchronize)
+    types: [opened, synchronize, reopened]
 
 # --- 2. Define the main job ---
 jobs:
   run_auto_review:
     runs-on: ubuntu-latest
     
-    # Give the workflow explicit permission to read code and post comments
+    # CRITICAL: Grant full permissions for reading and writing comments/checks
     permissions:
       contents: read
-      pull-requests: write # This is essential for posting the review comment
+      pull-requests: write 
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4 # Downloads your code to the runner
+        uses: actions/checkout@v4
 
       - name: Set up Python Environment
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Recommended Python version for stability
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
-          # Upgrade pip and install all project dependencies
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Install optional Gemini dependencies (needed because of the LLM model string format)
           pip install "crewai[google-genai]"
           
       - name: Execute 4-Agent Pipeline
-        # This step runs your main script. It passes the secrets as environment variables (env).
         run: python agent_reviewer.py
         env:
-          # Passes the stored secrets securely to the Python script
-          # The key names must match your GitHub Secrets exactly (GEMINI_API_KEY and PAT_COMMENT)
+          # Passes the stored Gemini secret securely
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_PAT: ${{ secrets.PAT_COMMENT }} # <-- Changed from GITHUB_PAT_COMMENT to PAT_COMMENT
           
-          # Pass the current PR URL so the script knows where to post the comment
-          # This line needs to be properly indented under 'env:'
+          # CRITICAL FIX: Use the built-in token provided by GitHub Actions
+          # This token is always available and has the 'pull-requests: write' permission.
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }} 
+          
+          # Pass the current PR URL
           PR_URL: ${{ github.event.pull_request.html_url }}
