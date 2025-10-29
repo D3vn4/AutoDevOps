@@ -2,19 +2,20 @@
 
 name: AutoDevOps PR Review Pipeline
 
-# --- Triggers the workflow on every Pull Request update ---
+# --- 1. Define when this workflow runs ---
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened] # Runs when a PR is created or updated
 
+# --- 2. Define the main job ---
 jobs:
   run_auto_review:
     runs-on: ubuntu-latest
     
-    # CRITICAL: Grant pull-requests: write permission to the GITHUB_TOKEN
+    # CRITICAL: Grant pull-requests: write permission
     permissions:
       contents: read
-      pull-requests: write 
+      pull-requests: write # This is what allows the bot to post the comment
 
     steps:
       - name: Checkout Repository
@@ -25,22 +26,36 @@ jobs:
         with:
           python-version: '3.11'
 
+      # --- NEW STEP ADDED HERE ---
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          # This is the path where pip stores its downloaded packages
+          path: ~/.cache/pip
+          # This creates a unique key for the cache based on the runner's OS 
+          # and a HASH (a unique ID) of your requirements.txt file.
+          # If requirements.txt changes, the hash changes, and the cache is rebuilt.
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      # --- END OF NEW STEP ---
+
       - name: Install Dependencies
         run: |
-          # Install core dependencies (crewai, pytest, PyGithub, etc.)
+          # Install all project dependencies
           python -m pip install --upgrade pip
+          # This command will now run much faster on subsequent runs
           pip install -r requirements.txt
           pip install "crewai[google-genai]"
           
       - name: Execute 5-Agent Pipeline
-        # This step runs your final, corrected Python script
+        # This step passes the environment variables to the Python script
         run: python agent_reviewer.py
         env:
           # Passes the Gemini secret
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           
-          # CRITICAL FIX: Use the built-in GITHUB_TOKEN. Your Python script 
-          # must be coded to read this as GITHUB_PAT (or GITHUB_TOKEN).
+          # FIX: We use the built-in GITHUB_TOKEN and pass it as GITHUB_PAT.
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }} 
           
           # Pass the current PR URL
