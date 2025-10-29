@@ -2,20 +2,19 @@
 
 name: AutoDevOps PR Review Pipeline
 
-# --- 1. Define when this workflow runs ---
+# --- Triggers the workflow on every Pull Request update ---
 on:
   pull_request:
-    types: [opened, synchronize, reopened] # Runs when a PR is created or updated
+    types: [opened, synchronize, reopened]
 
-# --- 2. Define the main job ---
 jobs:
   run_auto_review:
     runs-on: ubuntu-latest
     
-    # CRITICAL: Grant pull-requests: write permission
+    # CRITICAL: Grant pull-requests: write permission to the GITHUB_TOKEN
     permissions:
       contents: read
-      pull-requests: write # This is what allows the bot to post the comment
+      pull-requests: write 
 
     steps:
       - name: Checkout Repository
@@ -28,20 +27,21 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Install all project dependencies
+          # Install core dependencies (crewai, pytest, PyGithub, etc.)
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install "crewai[google-genai]"
           
       - name: Execute 5-Agent Pipeline
-        # This step passes the environment variables to the Python script
+        # This step runs your final, corrected Python script
         run: python agent_reviewer.py
         env:
           # Passes the Gemini secret
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           
-          # FIX: We use the built-in GITHUB_TOKEN and pass it as GITHUB_PAT.
-          # This token is guaranteed to exist and have the 'pull-requests: write' permission.
+          # CRITICAL FIX: Use the built-in GITHUB_TOKEN. Your Python script 
+          # must be coded to read this as GITHUB_PAT (or GITHUB_TOKEN).
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }} 
           
+          # Pass the current PR URL
           PR_URL: ${{ github.event.pull_request.html_url }}
