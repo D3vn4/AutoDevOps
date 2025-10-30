@@ -421,23 +421,31 @@ def main():
 
     test_generation_task = Task(
         description=(
-            "You will receive a review report (which includes corrected code blocks) and a security report. "
-            "Your goal is to create a single, runnable pytest script. "
-            
-            "CRITICAL: To make this script 100% self-contained, you MUST **copy the corrected functions and classes** "
+             "You will receive a review report (which includes corrected code blocks) and a security report. "
+            "Your goal is to create a single, runnable pytest script that verifies the correctness of the provided code. "
+            "\n\n"
+            "CRITICAL RULES:\n"
+            "1. The test script must be 100% self-contained. You MUST copy all corrected functions and classes "
             "(e.g., `calculate_area`, `GitHubPRTool`, `setup_environment`, etc.) from the 'CORRECTED CODE' blocks "
-            "directly into the top of your test script. "
-            
-            "Your test script MUST NOT try to `import agent_reviewer` or `import sample`. "
-            "It should only import standard libraries like `pytest`, `unittest.mock`, `os`, `sys`, etc. "
-            
-            "After copying the code to be tested, write pytest functions to test these *local* functions/classes, "
-            "mocking all external dependencies as required."
+            "directly into the top of your test file.\n"
+            "2. DO NOT try to `import agent_reviewer`, `import sample`, or any project module. Only import standard "
+            "Python libraries like `pytest`, `unittest.mock`, `os`, or `sys`.\n"
+            "3. When mocking, NEVER patch or mock built-in, standard library, or third-party library internals "
+            "(e.g., `dotenv.load_dotenv`, `github.Auth`, `os.getenv`, or `subprocess.run`). These should remain real.\n"
+            "4. Only use mocks for external network calls or system interactions that cannot run locally (e.g., API calls, GitHub connections).\n"
+            "5. If you use pytest fixtures (like `mock_run`, `mock_auth`, etc.), they must be DEFINED inside the same file.\n"
+            "6. Keep the test simple, deterministic, and focused on function logic—not external services.\n\n"
+            "After copying the code under test, define pytest functions that validate core behaviors, handle edge cases, "
+            "and ensure each class or function runs without errors."
         ),
         expected_output=(
             "A single Python code block starting with ```python and ending with ```. "
-            "This block must be a complete, runnable pytest file, containing the "
-            "**copied source code** at the top, followed by the `pytest` test functions."
+            "This code block must contain:\n"
+            "1. The copied source code at the top.\n"
+            "2. Any fixtures required by tests defined in the same file.\n"
+            "3. Multiple pytest functions testing the correctness, expected outputs, and error handling.\n"
+            "4. No external imports or undefined variables.\n\n"
+            "The resulting script should run successfully via `pytest` and print a valid test summary."
         ),
         agent=test_generator,
         context=[review_task, security_audit_task]
