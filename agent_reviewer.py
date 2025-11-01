@@ -1,7 +1,7 @@
 """
 AutoDevOps AI Agent Crew
 ------------------------
-This script launches a multi-agent crew to automate the Pull Request (PR)
+This script launches a multi-agent "hybrid" crew to automate the Pull Request (PR)
 code review, testing, and reporting process. It integrates with GitHub for
 reading files and posting the final summary.
 
@@ -17,6 +17,7 @@ import sys
 import subprocess
 import tempfile
 import logging
+import json # For parsing tool outputs
 
 # Third-Party Libraries
 from dotenv import load_dotenv
@@ -27,15 +28,18 @@ from github import Github, Auth # CRITICAL: Import Auth for modern PAT usage
 # --- 2. Configuration and Setup ---
 
 # Configure logging for clear, professional-looking output
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # --- Constants ---
 # PR_TO_REVIEW is used as a fallback if the GitHub Action environment variable (PR_URL) is missing
-PR_TO_REVIEW = "https://github.com/D3vn4/AutoDevOps/pull/1"
+PR_TO_REVIEW = "https://github.com/D3vn4/AutoDevOps/pull/1" 
 
-# LLM Model Selection: Use PRO for complex reasoning, Flash for fast initial processing.
-LLM_FAST = "gemini/gemini-2.5-flash"
-LLM_REASONING = "gemini/gemini-2.5-pro" 
+# LLM Model Selection: Use PRO for complex reasoning.
+LLM_REASONING = "gemini/gemini-2.5-pro"
 
 def setup_environment():
     """
@@ -77,7 +81,8 @@ class GitHubPRTool(BaseTool):
             # FIX: Use Auth.Token() for modern, non-deprecated PyGithub authentication
             auth = Auth.Token(github_pat)
             self.github_client = Github(auth=auth)
-            logging.info("GitHubPRTool: Authenticated successfully.")
+            # FIX: Removed auth.get_user().login() which causes 403 Forbidden error in Actions
+            logging.info("GitHubPRTool: Authentication client initialized.")
         except Exception as e:
             logging.error(f"GitHubPRTool: Failed to authenticate with PAT. {e}")
             raise Exception(f"Failed to authenticate with GitHub PAT: {e}")
@@ -87,7 +92,7 @@ class GitHubPRTool(BaseTool):
         try:
             parts = pr_url.strip("/").split("/")
             if len(parts) < 4 or parts[-2] != "pull":
-                return f"Error: Invalid PR URL format. Expected '.../owner/repo/pull/number'."
+                return "Error: Invalid PR URL format. Expected '.../owner/repo/pull/number'."
             
             pr_number = int(parts[-1])
             repo_name = f"{parts[-4]}/{parts[-3]}"
@@ -97,48 +102,144 @@ class GitHubPRTool(BaseTool):
             repo = self.github_client.get_repo(repo_name)
             pr = repo.get_pull(pr_number)
             head_sha = pr.head.sha
-            all_code_content = ""
+            
+            file_contents = {} # Use a dictionary to store content by filename
             
             for file in pr.get_files():
                 if file.filename.endswith(".py"):
                     logging.info(f"Tool: Reading file '{file.filename}'")
                     content_obj = repo.get_contents(file.filename, ref=head_sha)
                     file_content = content_obj.decoded_content.decode('utf-8')
-                    
-                    all_code_content += f"\n\n--- START OF FILE: {file.filename} ---\n"
-                    all_code_content += file_content
-                    all_code_content += f"\n--- END OF FILE: {file.filename} ---\n"
+                    file_contents[file.filename] = file_content
             
-            if not all_code_content:
+            if not file_contents:
                 return "No .py files were found in this Pull Request."
-            return all_code_content
+            
+            # Return a JSON string of the files and their content
+            return json.dumps(file_contents)
 
         except Exception as e:
             logging.error(f"Error while processing GitHub PR: {e}")
             return f"Error while processing GitHub PR: {e}"
 
 
+class RuffTool(BaseTool):
+    """
+    A custom tool to run the 'ruff' linter on Python code and get a JSON report.
+    """
+    name: str = "Ruff Linter Tool"
+    description: str = "Runs the 'ruff' linter on a given Python code string and returns a JSON report of issues."
+
+    def _run(self, code_content: str) -> str:
+        """Runs ruff on the code content."""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode='w', encoding='utf-8') as code_file:
+                code_file.write(code_content)
+                code_file_path = code_file.name
+
+            logging.info(f"Tool: Running ruff on {code_file_path}")
+
+            python_executable = sys.executable
+            process = subprocess.run(
+                [python_executable, "-m", "ruff", "check", code_file_path, "--format=json", "--exit-zero"],
+                capture_output=True, text=True, timeout=30
+            )
+            
+            os.unlink(code_file_path)
+
+            if process.stderr:
+                logging.warning(f"RuffTool STDERR: {process.stderr}")
+
+            return process.stdout
+
+        except Exception as e:
+            if 'code_file_path' in locals() and os.path.exists(code_file_path):
+                os.unlink(code_file_path)
+            logging.error(f"Error during ruff execution: {e}")
+            return f"Error during ruff execution: {e}"
+
+
+class BanditTool(BaseTool):
+    """
+    A custom tool to run the 'bandit' security scanner on Python code.
+    """
+    name: str = "Bandit Security Tool"
+    description: str = "Runs the 'bandit' security scanner on a given Python code string and returns a JSON report of issues."
+
+    def _run(self, code_content: str) -> str:
+        """Runs bandit on the code content."""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode='w', encoding='utf-8') as code_file:
+                code_file.write(code_content)
+                code_file_path = code_file.name
+
+            logging.info(f"Tool: Running bandit on {code_file_path}")
+
+            python_executable = sys.executable
+            process = subprocess.run(
+                [python_executable, "-m", "bandit", "-f", "json", "-q", code_file_path],
+                capture_output=True, text=True, timeout=30
+            )
+
+            os.unlink(code_file_path)
+            
+            if process.stderr:
+                logging.warning(f"BanditTool STDERR: {process.stderr}")
+
+            return process.stdout
+
+        except Exception as e:
+            if 'code_file_path' in locals() and os.path.exists(code_file_path):
+                os.unlink(code_file_path)
+            logging.error(f"Error during bandit execution: {e}")
+            return f"Error during bandit execution: {e}"
+
+
 class PytestExecutionTool(BaseTool):
-    """Tool to securely execute a self-contained pytest script."""
-    name: str = "Pytest Execution Tool"
-    description: str = "Saves and runs a self-contained pytest script in a temporary file and returns the output."
+    """
+    A tool to run pytest *with coverage* on a self-contained test script.
+    """
+    name: str = "Pytest Coverage Tool"
+    description: str = "Saves and runs a self-contained pytest script, capturing the test and coverage report."
 
     def _run(self, test_code: str) -> str:
-        """Runs a self-contained pytest script in a subprocess."""
+        """Runs pytest with pytest-cov and captures the output."""
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix="_test.py", mode='w', encoding='utf-8', dir=".") as test_file:
                 test_file.write(test_code)
                 test_file_path = test_file.name
 
-            logging.info(f"Tool: Running tests from temporary file {test_file_path}")
+            # Safety: detect if generated tests import `main` (common AI mistake)
+            # and rewrite to import `agent_reviewer` instead so pytest won't
+            # fail with ModuleNotFoundError. This is a defensive fallback in
+            # case the Test Generator agent hallucinated and used `main`.
+            try:
+                with open(test_file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                modified = False
+                if 'import main' in content or 'from main import' in content:
+                    logging.warning("PytestExecutionTool: detected 'main' imports in "
+                                    "generated test. Rewriting to use 'agent_reviewer'.")
+                    # Replace `import main` -> `import agent_reviewer as main`
+                    content = content.replace('import main', 'import agent_reviewer as main')
+                    # Replace `from main import X` -> `from agent_reviewer import X`
+                    content = content.replace('from main import', 'from agent_reviewer import')
+                    modified = True
+
+                if modified:
+                    with open(test_file_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+            except Exception:
+                # If rewriting fails, continue and let pytest report the error.
+                logging.exception("Failed to sanitize generated test file.")
+
+            logging.info(f"Tool: Running tests with coverage from {test_file_path}")
 
             python_executable = sys.executable
-
             process = subprocess.run(
-                [python_executable, "-m", "pytest", test_file_path],
-                capture_output=True,
-                text=True,
-                timeout=60
+                [python_executable, "-m", "pytest", "--cov=.", test_file_path],
+                capture_output=True, text=True, timeout=60
             )
 
             os.unlink(test_file_path)
@@ -149,10 +250,10 @@ class PytestExecutionTool(BaseTool):
                 return f"Tests FAILED!\n\nSTDOUT:\n{process.stdout}\n\nSTDERR:\n{process.stderr}"
 
         except Exception as e:
-            if 'test_file_path' in locals() and os.path.exists('test_file_path'):
-                os.unlink('test_file_path')
-            logging.error(f"Error during test execution: {e}")
-            return f"Error during test execution: {e}"
+            if 'test_file_path' in locals() and os.path.exists(test_file_path):
+                os.unlink(test_file_path)
+            logging.error(f"Error during test/coverage execution: {e}")
+            return f"Error during test/coverage execution: {e}"
 
 
 class GitHubPRCommentTool(BaseTool):
@@ -164,10 +265,9 @@ class GitHubPRCommentTool(BaseTool):
     def __init__(self, github_pat: str):
         super().__init__()
         try:
-            # FIX: Use Auth.Token() for modern, non-deprecated PyGithub authentication
             auth = Auth.Token(github_pat)
             self.github_client = Github(auth=auth)
-            logging.info("GitHubPRCommentTool: Authenticated successfully.")
+            logging.info("GitHubPRCommentTool: Authentication client initialized.")
         except Exception as e:
             logging.error(f"GitHubPRCommentTool: Failed to authenticate with PAT. {e}")
             raise Exception(f"Failed to authenticate with GitHub PAT: {e}")
@@ -177,7 +277,7 @@ class GitHubPRCommentTool(BaseTool):
         try:
             parts = pr_url.strip("/").split("/")
             if len(parts) < 4 or parts[-2] != "pull":
-                return "Error: Invalid PR URL format. Expected '.../owner/repo/pull/number'."
+                return "Error: Invalid PR URL format."
             
             pr_number = int(parts[-1])
             repo_name = f"{parts[-4]}/{parts[-3]}"
@@ -209,172 +309,239 @@ def main():
         logging.error(e)
         sys.exit(1)
 
-    # Use the PR_URL environment variable from GitHub Actions, or fallback to PR_TO_REVIEW constant
-    # The Action should be passing PR_URL as an environment variable
     pr_url = os.getenv("PR_URL", PR_TO_REVIEW) 
 
     # --- 1. Instantiate Tools ---
     try:
-        # Pass the GitHub PAT to the tool constructors
         github_read_tool = GitHubPRTool(github_pat=github_pat)
         github_comment_tool = GitHubPRCommentTool(github_pat=github_pat) 
     except Exception:
-        # Exit handled inside tool constructors if Auth fails
         sys.exit(1) 
     
     pytest_tool = PytestExecutionTool()
+    ruff_tool = RuffTool()
+    bandit_tool = BanditTool()
     logging.info("All tools instantiated successfully.")
 
     # --- 2. Define Agents ---
     
-    # Reviewer uses the faster Flash model for initial code parsing
     code_reviewer = Agent(
-        role='Expert Python Code Reviewer',
-        goal='Analyze Python code from a GitHub PR for bugs, style, and performance. Provide corrected code.',
-        backstory="You are a meticulous Senior Software Engineer. You read code from PRs, identify all issues, and provide complete, corrected code blocks for review.",
+        role='Senior Python Developer',
+        goal=(
+            "Analyze Python code for style, errors, and logic. Use `ruff` for "
+            "speed and apply your expertise for high-level reasoning."
+        ),
+        backstory=(
+            "You are a meticulous Senior Software Engineer. First, use the "
+            "`Ruff Linter Tool` to obtain a JSON report of style and bug "
+            "issues. Then review that report and the original code to add "
+            "human-level feedback on readability and logic. Provide corrected "
+            "code blocks only when necessary."
+        ),
         verbose=True,
         allow_delegation=False,
-        tools=[github_read_tool],
-        llm=LLM_FAST
+        tools=[github_read_tool, ruff_tool],
+        llm=LLM_REASONING 
     )
 
-    # Security Agent: Specialized agent for finding vulnerabilities and preparing reports
     security_agent = Agent(
         role='Python Security Auditor',
-        goal='Analyze code for common security vulnerabilities (e.g., subprocess, unsanitized input, insecure configs) and report findings separately.',
-        backstory="You are a specialist in DevSecOps. Your job is to perform a deep dive into the code provided by the Reviewer and flag any security risks, reporting a high-level summary to the main crew.",
+        goal=(
+            "Analyze code for security vulnerabilities using the `BanditTool`. "
+            "Summarize findings with focus on medium and high severity issues."
+        ),
+        backstory=(
+            "You are a DevSecOps specialist. Use the `Bandit Security Tool` to "
+            "obtain a JSON report of potential vulnerabilities. Review the "
+            "report, ignore low-severity 'Info' items, and summarize any MEDIUM "
+            "or HIGH risk issues by file and line number."
+        ),
         verbose=True,
         allow_delegation=False,
-        tools=[],
-        llm=LLM_REASONING # CRITICAL FIX: Use Pro model for deep security analysis
+        tools=[bandit_tool],
+        llm=LLM_REASONING
     )
 
-    # Generator uses the Pro model for complex reasoning (mocking/test logic)
     test_generator = Agent(
         role='Software Quality Assurance Engineer',
-        goal='Generate comprehensive, self-contained pytest unit tests for given corrected Python code.',
-        backstory="You are a skilled QA Engineer. You write pytest files that are self-contained. You MUST use '@patch' to mock all external dependencies for isolated execution.",
+        goal=(
+            "Generate comprehensive, self-contained pytest unit tests for the "
+            "corrected Python code provided by the reviewer."
+        ),
+        backstory=(
+            "You are a skilled QA Engineer. Produce pytest files that are fully "
+            "self-contained. Use `@patch` to mock external dependencies for "
+            "isolated execution."
+        ),
         verbose=True,
         allow_delegation=False,
         tools=[],
-        llm=LLM_REASONING # CRITICAL FIX: Use Pro model
+        llm=LLM_REASONING
     )
 
-    # Executor uses the Pro model for reliable parsing of the test output
     test_executor = Agent(
         role='Software Test Executor',
         goal='Run the provided self-contained pytest script and report the raw results.',
-        backstory="You are an execution bot. You take a full Python script containing pytest tests, run it using the Pytest Execution Tool, and report the full, unfiltered output.",
+        backstory=(
+            "You are an execution bot. Use the `Pytest Coverage Tool` to run "
+            "tests and return the raw output, including the coverage percent."
+        ),
         verbose=True,
         allow_delegation=False,
         tools=[pytest_tool],
-        llm=LLM_REASONING # CRITICAL FIX: Use Pro model
+        llm=LLM_REASONING
     )
     
-    # Reporter uses the Pro model for summarizing complex context and final output generation
     report_agent = Agent(
         role='DevOps Reporter',
-        goal='Summarize the code review, security audit, and test execution results and post them as a comment on the original GitHub Pull Request.',
-        backstory="You are the final step in the CI pipeline. You take all reports, format them into a single, easy-to-read markdown comment, and post it to the PR.",
+        goal='Summarize all findings (linting, security, test pass/fail, and coverage) and post them to the GitHub PR.',
+        backstory=(
+            "You are the final step. Collect all reports, format a single "
+            "easy-to-read markdown comment, and post it to the PR."
+        ),
         verbose=True,
         allow_delegation=False,
         tools=[github_comment_tool],
-        llm=LLM_REASONING # CRITICAL FIX: Use Pro model
+        llm=LLM_REASONING
     )
     logging.info("All agents defined.")
 
     # --- 3. Define Tasks ---
-    review_task = Task(
+    
+    file_reader_task = Task(
         description=(
-            f"Use the 'GitHub PR File Reader' tool to read all .py files from the PR: {pr_url}. "
-            "Then, review the code. Provide a report *and* the full, corrected code for *each* file."
+            f"Use the 'GitHub PR File Reader' tool to read all .py files from the PR: {pr_url}."
         ),
         expected_output=(
-            "1. A markdown report summarizing findings for each file.\n"
-            "2. A SEPARATE Python code block for *each* corrected file, starting with "
-            "--- START CORRECTED CODE: [filename.py] --- and ending with "
-            "--- END CORRECTED CODE: [filename.py] ---. This is critical for the next agent."
+            "A JSON string mapping filenames to their full text content."
         ),
         agent=code_reviewer,
     )
-    
-    security_audit_task = Task(
+
+    # --- UPDATED TASK: Forces detailed line-by-line reporting ---
+    review_task = Task(
         description=(
-            "Review the 'Code Review Report' from the previous task, paying special attention to the *original* code blocks. "
-            "Search for critical security vulnerabilities, especially in I/O operations, subprocess calls, and external data handling. "
-            "Generate a formal summary highlighting any high-risk findings."
+            "You will receive a JSON string of filenames and code. For *each* file:\n"
+            "1. Run the `Ruff Linter Tool` on its code content.\n"
+            "2. Parse the ruff JSON output and create a list of findings including"
+            " the filename, line number, error code (e.g., F821), and the error"
+            " message for each finding.\n"
+            "3. Add a high-level review of the file's logic and readability.\n"
+            "4. Provide a corrected code block ONLY if changes are necessary."
         ),
         expected_output=(
-            "A security summary titled 'Security Audit Results' listing any HIGH or MEDIUM risk vulnerabilities found. "
-            "If no vulnerabilities are found, state 'No major security vulnerabilities found'."
+            "A comprehensive code review report containing:\n"
+            "1. A 'Ruff Linter Findings' section formatted as a markdown list"
+            " that shows the file, line number, error code, and message for each"
+            " issue.\n"
+            "2. A 'High-Level Review' section with human-like feedback.\n"
+            "3. A SEPARATE Python code block for each corrected file. Each block"
+            " must start with: --- START CORRECTED CODE: [filename.py] --- and end"
+            " with: --- END CORRECTED CODE: [filename.py] ---."
+        ),
+        agent=code_reviewer,
+        context=[file_reader_task],  # Depends on the file content
+    )
+    
+    # --- UPDATED TASK: Forces detailed line-by-line reporting ---
+    security_audit_task = Task(
+        description=(
+            "You will receive the file content from the first task. For *each* file:\n"
+            "1. Run the `Bandit Security Tool` on its code content.\n"
+            "2. Parse the JSON report from Bandit.\n"
+            "3. Generate a summary of all HIGH or MEDIUM severity issues including"
+            " the filename, line number, and the issue text."
+        ),
+        expected_output=(
+            "A security summary titled 'Security Audit Results'.\n"
+            "If issues are found, list them by file and line number.\n"
+            "If no HIGH or MEDIUM issues are found, state: 'No major security"
+            " vulnerabilities found'."
         ),
         agent=security_agent,
-        context=[review_task]
+        context=[file_reader_task],  # Depends on the file content
     )
 
     test_generation_task = Task(
         description=(
-            "You will receive a review report and corrected code blocks. "
-            "Create a single, runnable pytest script. This script must be self-contained. "
-            "It MUST import 'pytest' and use '@patch' or fixtures to mock all external dependencies."
+            "You will receive a review report (which includes corrected code blocks) and a security report. "
+            "Your goal is to create a single, runnable pytest script. "
+            "\n\n"
+            "CRITICAL RULES:\n"
+            "1. Prefer importing the repository module under test: `import agent_reviewer`\n"
+            "   (this enables accurate coverage reporting). If importing the module\n"
+            "   requires heavy third-party dependencies (GitHub clients, CrewAI,\n"
+            "   etc.), mock them with `unittest.mock` or provide minimal stubs\n"
+            "   within the test file using `sys.modules` before importing.\n"
+            "2. If you choose NOT to import the module, the test MUST be fully\n"
+            "   self-contained: copy corrected functions/classes into the top of\n"
+            "   the test file. BUT note that inlining code typically prevents\n"
+            "   coverage from attributing execution to the original module files.\n"
+            "3. Any pytest fixture you use (like 'mock_client') MUST be defined "
+            "   with an '@pytest.fixture' decorator in the *same file*. Do not call"
+            "   fixtures that you have not defined.\n"
         ),
         expected_output=(
             "A single Python code block starting with ```python and ending with ```. "
-            "This block must be a complete, runnable pytest file, including all necessary imports "
-            "(pytest, patch, etc.) and all mocks required to run without external files or APIs."
+            "This block must be a complete, runnable pytest file, containing the "
+            "**copied source code** at the top, followed by all necessary **fixture definitions**, "
+            "followed by the `pytest` test functions."
         ),
         agent=test_generator,
-        context=[review_task]
+        context=[review_task, security_audit_task]
     )
 
     test_execution_task = Task(
         description=(
-            "You will receive a string containing a self-contained pytest script. "
-            "Extract the Python code block (starting with ```python). "
-            "Then, use the 'Pytest Execution Tool' to run this test code."
+            "You will receive a self-contained pytest script. Use the 'Pytest "
+            "Coverage Tool' to run this test code."
         ),
         expected_output=(
-            "The full, raw output from the 'Pytest Execution Tool', showing "
-            "whether the tests passed or failed."
+            "The full, raw output from the 'Pytest Coverage Tool'. The output"
+            " MUST include the test pass/fail summary and the final coverage"
+            " percentage (for example, 'Coverage: 92%')."
         ),
         agent=test_executor,
-        context=[test_generation_task]
+        context=[test_generation_task],
     )
     
+    # --- UPDATED TASK: Forces detailed reporting in the final comment ---
     report_task = Task(
         description=(
-            "You will receive context from four previous tasks: the review, the security audit, the generated tests, and the test execution results. "
-            "Your job is to create a single, comprehensive summary comment in markdown for the GitHub PR. "
-            "The comment MUST be professionally formatted and include: "
-            "1. A high-level summary of the original Code Review Report (Agent 1). "
-            "2. The Security Audit Results (Agent 2). "
-            "3. The *final* Pytest Execution Results (Agent 4), specifically the 'XX passed/failed' line. "
-            "Once you have this summary, use the 'GitHub PR Comment Tool' to post it. "
-            f"The URL to post to is: {pr_url}"
+            "You will receive context from all previous tasks (review, security,"
+            " test execution). Create a single, comprehensive summary comment in"
+            " markdown for the GitHub PR. Your comment MUST be professionally"
+            " formatted and include these sections:\n"
+            "1. 'Code Review & Linting': Paste the detailed Ruff Linter Findings"
+            " (with line numbers) and the 'High-Level Review' from the review"
+            " task.\n"
+            "2. 'Security Audit': Paste the detailed Bandit Results (with line"
+            " numbers) from the security task.\n"
+            "3. 'Test Execution & Coverage': Paste the pytest pass/fail summary"
+            " and the final coverage percentage from the test execution task.\n"
+            "Once you have the full summary, use the 'GitHub PR Comment Tool' to"
+            " post it. The URL to post to is: " + pr_url
         ),
         expected_output=(
-            "A confirmation message stating 'Comment posted successfully.' "
-            "or an error if posting failed."
+            "A confirmation message stating 'Comment posted successfully.'"
         ),
         agent=report_agent,
-        context=[review_task, security_audit_task, test_generation_task, test_execution_task]
+        context=[review_task, security_audit_task, test_execution_task],
     )
     logging.info("All tasks defined.")
 
     # --- 4. Create and Run the Crew ---
     code_analysis_crew = Crew(
-        agents=[code_reviewer, security_agent, test_generator, test_executor, report_agent], # ADDED Security Agent
-        tasks=[review_task, security_audit_task, test_generation_task, test_execution_task, report_task], # ADDED Security Audit Task
+        agents=[code_reviewer, security_agent, test_generator, test_executor, report_agent],
+        tasks=[file_reader_task, review_task, security_audit_task, test_generation_task, test_execution_task, report_task],
         process=Process.sequential,
         verbose=True
     )
     logging.info("Crew created.")
     
-    # Kick off the crew's execution
     logging.info("Starting Code Analysis Crew...")
     result = code_analysis_crew.kickoff()
 
-    # Print the final result from the last task
     logging.info("Crew Execution Finished!")
     print("\n" + "="*30)
     print(" Final Result (Reporting Status)")
@@ -382,7 +549,5 @@ def main():
     print(result)
 
 
-# This standard Python construct ensures that main() is called
-# only when the script is executed directly (not when imported).
 if __name__ == "__main__":
     main()
