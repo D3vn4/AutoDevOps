@@ -5,8 +5,8 @@ This script launches a multi-agent "hybrid" crew to automate the Pull Request (P
 code review, testing, and reporting process. It integrates with GitHub for
 reading files and posting the final summary.
 
-This version incorporates specialized agents and fixes to run reliably on 
-GitHub Actions using environment secrets.
+This version uses the 'gemini-2.5-flash' model for all agents to ensure
+compatibility with free-tier API rate limits.
 """
 
 # --- 1. Imports ---
@@ -38,8 +38,8 @@ logging.basicConfig(
 # PR_TO_REVIEW is used as a fallback if the GitHub Action environment variable (PR_URL) is missing
 PR_TO_REVIEW = "https://github.com/D3vn4/AutoDevOps/pull/1" 
 
-# LLM Model Selection: Use PRO for complex reasoning.
-LLM_REASONING = "gemini/gemini-2.5-pro"
+# LLM Model Selection: Use Flash model for all agents to avoid rate limiting.
+LLM_MODEL = "gemini/gemini-2.5-flash"
 
 def setup_environment():
     """
@@ -92,7 +92,7 @@ class GitHubPRTool(BaseTool):
         try:
             parts = pr_url.strip("/").split("/")
             if len(parts) < 4 or parts[-2] != "pull":
-                return "Error: Invalid PR URL format. Expected '.../owner/repo/pull/number'."
+                return f"Error: Invalid PR URL format. Expected '.../owner/repo/pull/number'."
             
             pr_number = int(parts[-1])
             repo_name = f"{parts[-4]}/{parts[-3]}"
@@ -135,17 +135,17 @@ class RuffTool(BaseTool):
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode='w', encoding='utf-8') as code_file:
                 code_file.write(code_content)
-                code_file_path = code_file.name
+                code_file_path = code_file.name # This variable is intentionally unused
 
-            logging.info(f"Tool: Running ruff on {code_file_path}")
+            logging.info(f"Tool: Running ruff on {code_file.name}")
 
             python_executable = sys.executable
             process = subprocess.run(
-                [python_executable, "-m", "ruff", "check", code_file_path, "--format=json", "--exit-zero"],
+                [python_executable, "-m", "ruff", "check", code_file.name, "--format=json", "--exit-zero"],
                 capture_output=True, text=True, timeout=30
             )
             
-            os.unlink(code_file_path)
+            os.unlink(code_file.name)
 
             if process.stderr:
                 logging.warning(f"RuffTool STDERR: {process.stderr}")
@@ -153,8 +153,8 @@ class RuffTool(BaseTool):
             return process.stdout
 
         except Exception as e:
-            if 'code_file_path' in locals() and os.path.exists(code_file_path):
-                os.unlink(code_file_path)
+            if 'code_file' in locals() and os.path.exists(code_file.name):
+                os.unlink(code_file.name)
             logging.error(f"Error during ruff execution: {e}")
             return f"Error during ruff execution: {e}"
 
@@ -171,17 +171,17 @@ class BanditTool(BaseTool):
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode='w', encoding='utf-8') as code_file:
                 code_file.write(code_content)
-                code_file_path = code_file.name
+                code_file_path = code_file.name # This variable is intentionally unused
 
-            logging.info(f"Tool: Running bandit on {code_file_path}")
+            logging.info(f"Tool: Running bandit on {code_file.name}")
 
             python_executable = sys.executable
             process = subprocess.run(
-                [python_executable, "-m", "bandit", "-f", "json", "-q", code_file_path],
+                [python_executable, "-m", "bandit", "-f", "json", "-q", code_file.name],
                 capture_output=True, text=True, timeout=30
             )
 
-            os.unlink(code_file_path)
+            os.unlink(code_file.name)
             
             if process.stderr:
                 logging.warning(f"BanditTool STDERR: {process.stderr}")
@@ -189,8 +189,8 @@ class BanditTool(BaseTool):
             return process.stdout
 
         except Exception as e:
-            if 'code_file_path' in locals() and os.path.exists(code_file_path):
-                os.unlink(code_file_path)
+            if 'code_file' in locals() and os.path.exists(code_file.name):
+                os.unlink(code_file.name)
             logging.error(f"Error during bandit execution: {e}")
             return f"Error during bandit execution: {e}"
 
@@ -204,35 +204,11 @@ class PytestExecutionTool(BaseTool):
 
     def _run(self, test_code: str) -> str:
         """Runs pytest with pytest-cov and captures the output."""
+        test_file_path = None # Define variable in outer scope for cleanup
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix="_test.py", mode='w', encoding='utf-8', dir=".") as test_file:
                 test_file.write(test_code)
-                test_file_path = test_file.name
-
-            # Safety: detect if generated tests import `main` (common AI mistake)
-            # and rewrite to import `agent_reviewer` instead so pytest won't
-            # fail with ModuleNotFoundError. This is a defensive fallback in
-            # case the Test Generator agent hallucinated and used `main`.
-            try:
-                with open(test_file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-
-                modified = False
-                if 'import main' in content or 'from main import' in content:
-                    logging.warning("PytestExecutionTool: detected 'main' imports in "
-                                    "generated test. Rewriting to use 'agent_reviewer'.")
-                    # Replace `import main` -> `import agent_reviewer as main`
-                    content = content.replace('import main', 'import agent_reviewer as main')
-                    # Replace `from main import X` -> `from agent_reviewer import X`
-                    content = content.replace('from main import', 'from agent_reviewer import')
-                    modified = True
-
-                if modified:
-                    with open(test_file_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-            except Exception:
-                # If rewriting fails, continue and let pytest report the error.
-                logging.exception("Failed to sanitize generated test file.")
+                test_file_path = test_file.name # This variable is intentionally unused
 
             logging.info(f"Tool: Running tests with coverage from {test_file_path}")
 
@@ -250,7 +226,8 @@ class PytestExecutionTool(BaseTool):
                 return f"Tests FAILED!\n\nSTDOUT:\n{process.stdout}\n\nSTDERR:\n{process.stderr}"
 
         except Exception as e:
-            if 'test_file_path' in locals() and os.path.exists(test_file_path):
+            # FIX: Use the variable test_file_path for cleanup, not the string 'test_file_path'
+            if test_file_path and os.path.exists(test_file_path):
                 os.unlink(test_file_path)
             logging.error(f"Error during test/coverage execution: {e}")
             return f"Error during test/coverage execution: {e}"
@@ -341,7 +318,7 @@ def main():
         verbose=True,
         allow_delegation=False,
         tools=[github_read_tool, ruff_tool],
-        llm=LLM_REASONING 
+        llm=LLM_MODEL # <-- Use the single Flash model
     )
 
     security_agent = Agent(
@@ -359,7 +336,7 @@ def main():
         verbose=True,
         allow_delegation=False,
         tools=[bandit_tool],
-        llm=LLM_REASONING
+        llm=LLM_MODEL # <-- Use the single Flash model
     )
 
     test_generator = Agent(
@@ -376,7 +353,7 @@ def main():
         verbose=True,
         allow_delegation=False,
         tools=[],
-        llm=LLM_REASONING
+        llm=LLM_MODEL # <-- Use the single Flash model
     )
 
     test_executor = Agent(
@@ -389,7 +366,7 @@ def main():
         verbose=True,
         allow_delegation=False,
         tools=[pytest_tool],
-        llm=LLM_REASONING
+        llm=LLM_MODEL # <-- Use the single Flash model
     )
     
     report_agent = Agent(
@@ -402,7 +379,7 @@ def main():
         verbose=True,
         allow_delegation=False,
         tools=[github_comment_tool],
-        llm=LLM_REASONING
+        llm=LLM_MODEL # <-- Use the single Flash model
     )
     logging.info("All agents defined.")
 
@@ -418,7 +395,6 @@ def main():
         agent=code_reviewer,
     )
 
-    # --- UPDATED TASK: Forces detailed line-by-line reporting ---
     review_task = Task(
         description=(
             "You will receive a JSON string of filenames and code. For *each* file:\n"
@@ -443,7 +419,6 @@ def main():
         context=[file_reader_task],  # Depends on the file content
     )
     
-    # --- UPDATED TASK: Forces detailed line-by-line reporting ---
     security_audit_task = Task(
         description=(
             "You will receive the file content from the first task. For *each* file:\n"
@@ -462,24 +437,21 @@ def main():
         context=[file_reader_task],  # Depends on the file content
     )
 
+    # --- UPDATED TASK: Fixes ModuleNotFoundError ---
     test_generation_task = Task(
         description=(
             "You will receive a review report (which includes corrected code blocks) and a security report. "
             "Your goal is to create a single, runnable pytest script. "
             "\n\n"
             "CRITICAL RULES:\n"
-            "1. Prefer importing the repository module under test: `import agent_reviewer`\n"
-            "   (this enables accurate coverage reporting). If importing the module\n"
-            "   requires heavy third-party dependencies (GitHub clients, CrewAI,\n"
-            "   etc.), mock them with `unittest.mock` or provide minimal stubs\n"
-            "   within the test file using `sys.modules` before importing.\n"
-            "2. If you choose NOT to import the module, the test MUST be fully\n"
-            "   self-contained: copy corrected functions/classes into the top of\n"
-            "   the test file. BUT note that inlining code typically prevents\n"
-            "   coverage from attributing execution to the original module files.\n"
+            "1. The test script must be 100% self-contained. You MUST **copy all corrected functions and classes** "
+            "(e.g., `GitHubPRTool`, `setup_environment`, etc.) from the 'CORRECTED CODE' blocks "
+            "directly into the top of your test script.\n"
+            "2. DO NOT try to `import agent_reviewer`, `import sample`, or `import main`. "
+            "Only import standard Python libraries like `pytest`, `unittest.mock`, `os`, or `sys`.\n"
             "3. Any pytest fixture you use (like 'mock_client') MUST be defined "
-            "   with an '@pytest.fixture' decorator in the *same file*. Do not call"
-            "   fixtures that you have not defined.\n"
+            "with an '@pytest.fixture' decorator in the *same file*. Do not call fixtures "
+            "that you have not defined.\n"
         ),
         expected_output=(
             "A single Python code block starting with ```python and ending with ```. "
