@@ -75,28 +75,34 @@ The system relies entirely on environment variables (GitHub Actions compatible).
 ```env
 GOOGLE_API_KEY=your_google_gemini_api_key
 GITHUB_PAT=your_github_personal_access_token
+```
 
 Optional:
 ```env
 PR_URL=https://github.com/owner/repo/pull/number
+```
 
 If PR_URL is not provided, the script falls back to:
 ```bash
 https://github.com/D3vn4/AutoDevOps/pull/1
+```
 
 ### Installation
 ###1️⃣ Clone the Repository
 ```bash
 git clone https://github.com/D3vn4/AutoDevOps.git
 cd AutoDevOps
+```
 
 ### 2️⃣ Install Dependencies
 ```bash
 pip install crewai python-dotenv PyGithub ruff bandit pytest pytest-cov
+```
 
 ### ▶️ Running the System
 ```bash
 python agent_reviewer.py
+```
 
 The crew will:
  - Fetch PR files
