@@ -88,7 +88,7 @@ https://github.com/D3vn4/AutoDevOps/pull/1
 ```
 
 ### Installation
-###1️⃣ Clone the Repository
+### 1️⃣ Clone the Repository
 ```bash
 git clone https://github.com/D3vn4/AutoDevOps.git
 cd AutoDevOps
@@ -105,20 +105,20 @@ python agent_reviewer.py
 ```
 
 The crew will:
- - Fetch PR files
- - Analyze code
- - Run tests
- - Print final execution status
- - Post a comment on the PR
+- Fetch PR files
+- Analyze code
+- Run tests
+- Print final execution status
+- Post a comment on the PR
 
 ### 🧪 Testing Strategy
 
-Tests are AI-generated
-Tests are fully self-contained
-No imports from project modules
-All required classes/functions are copied into the test file
-Ensures zero ModuleNotFoundError
-Coverage is calculated during execution
+- Tests are AI-generated
+- Tests are fully self-contained
+- No imports from project modules
+- All required classes/functions are copied into the test file
+- Ensures zero ModuleNotFoundError
+- Coverage is calculated during execution
 
 ### 📝 PR Comment Output
 The posted PR comment includes:
